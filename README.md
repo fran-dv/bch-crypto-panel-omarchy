@@ -2,8 +2,6 @@
 
 A compact Bitcoin Cash price pill for the [Omarchy](https://omarchy.org) bar, with a popup panel showing a live chart, market stats and search for any other coin. Prices come from the free [CoinGecko](https://www.coingecko.com/en/api) API — no API key needed.
 
-![Bar pill](assets/pill.png)
-
 ![Panel](assets/panel.png)
 
 ## Features
@@ -42,16 +40,16 @@ omarchy plugin remove bch-crypto-panel
 
 ## Usage
 
-| Action | Result |
-|---|---|
-| Left-click pill | Toggle panel |
-| Middle-click pill | Refresh now |
-| Hover pill | Exact price and 24h change |
-| `/` or `s` | Focus search (↑/↓ + Enter to pick a coin) |
-| `1`–`4` or `h` / `l` | Switch chart range |
-| `r` | Refresh |
-| `Esc` | Back to BCH, then close |
-| `Tab` | Move to the next bar panel |
+| Action               | Result                                    |
+| -------------------- | ----------------------------------------- |
+| Left-click pill      | Toggle panel                              |
+| Middle-click pill    | Refresh now                               |
+| Hover pill           | Exact price and 24h change                |
+| `/` or `s`           | Focus search (↑/↓ + Enter to pick a coin) |
+| `1`–`4` or `h` / `l` | Switch chart range                        |
+| `r`                  | Refresh                                   |
+| `Esc`                | Back to BCH, then close                   |
+| `Tab`                | Move to the next bar panel                |
 
 ### Optional keybinding
 
@@ -69,13 +67,13 @@ o.bind("SUPER + ALT + C", "Crypto prices", "omarchy-shell shell toggle bch-crypt
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `manifest.json` | Plugin metadata and entry point |
-| `BarWidget.qml` | Bar pill |
-| `Panel.qml` | Popup UI, fetching, caching, search |
-| `PriceChart.qml` | Canvas area chart with hover crosshair |
-| `Model.js` | API URLs, response parsing, number formatting |
+| File             | Purpose                                       |
+| ---------------- | --------------------------------------------- |
+| `manifest.json`  | Plugin metadata and entry point               |
+| `BarWidget.qml`  | Bar pill                                      |
+| `Panel.qml`      | Popup UI, fetching, caching, search           |
+| `PriceChart.qml` | Canvas area chart with hover crosshair        |
+| `Model.js`       | API URLs, response parsing, number formatting |
 
 ## License
 
