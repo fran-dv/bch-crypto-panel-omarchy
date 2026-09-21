@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -280,11 +282,11 @@ Panel {
     suggestionIndex = 0
   }
 
-  function pickResult(result) {
-    if (!result) return
+  function pickResult(coin) {
+    if (!coin) return
     clearSearch()
     keyCatcher.forceActiveFocus()
-    selectCoin(result.id)
+    selectCoin(coin.id)
   }
 
   Request {
@@ -433,13 +435,14 @@ Panel {
             model: root.searchResults
 
             Rectangle {
+              id: result
               required property var modelData
               required property int index
               readonly property bool hot: index === root.suggestionIndex
               width: parent.width
               height: resultRow.implicitHeight + Style.space(12)
               radius: Style.cornerRadius
-              color: hot ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+              color: result.hot ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
 
               Row {
                 id: resultRow
@@ -449,13 +452,13 @@ Panel {
                 spacing: Style.space(8)
 
                 Text {
-                  text: modelData.name
-                  color: hot ? Style.hoverStateColor(root.fg, Color.accent) : root.fg
+                  text: result.modelData.name
+                  color: result.hot ? Style.hoverStateColor(root.fg, Color.accent) : root.fg
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
                 }
                 Text {
-                  text: modelData.symbol
+                  text: result.modelData.symbol
                   color: root.muted
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
@@ -463,11 +466,11 @@ Panel {
                 }
               }
               Text {
-                visible: !isNaN(modelData.rank)
+                visible: !isNaN(result.modelData.rank)
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(10)
                 anchors.verticalCenter: parent.verticalCenter
-                text: "#" + modelData.rank
+                text: "#" + result.modelData.rank
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -477,8 +480,8 @@ Panel {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onPositionChanged: root.suggestionIndex = index
-                onClicked: root.pickResult(modelData)
+                onPositionChanged: root.suggestionIndex = result.index
+                onClicked: root.pickResult(result.modelData)
               }
             }
           }
@@ -637,18 +640,19 @@ Panel {
             ] : []
 
             Column {
+              id: stat
               required property var modelData
               width: content.width / 2
               spacing: Style.space(2)
 
               Text {
-                text: modelData.label
+                text: stat.modelData.label
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
               Text {
-                text: modelData.value
+                text: stat.modelData.value
                 color: root.fg
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body

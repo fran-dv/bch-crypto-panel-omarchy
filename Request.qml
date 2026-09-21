@@ -39,15 +39,19 @@ Process {
     req.completed(res.status, res.body, req.tag)
   }
 
-  onExited: {
+  // runningChanged instead of exited: same moment, but no enum-typed
+  // parameters for tooling to resolve.
+  onRunningChanged: {
+    if (req.running) return
     req._exited = true
     req._maybeComplete()
   }
 
   stdout: StdioCollector {
+    id: collector
     waitForEnd: true
     onStreamFinished: {
-      req._output = text
+      req._output = collector.text
       req._streamDone = true
       req._maybeComplete()
     }

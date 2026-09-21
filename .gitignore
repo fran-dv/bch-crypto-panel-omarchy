@@ -2,3 +2,4 @@
 *.qmlc
 *.jsc
 .DS_Store
+.qmlls.ini
