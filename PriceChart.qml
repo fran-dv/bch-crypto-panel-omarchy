@@ -154,23 +154,31 @@ Item {
     font.italic: true
   }
 
-  // Loading bar sweeping across the top while a fetch is in flight.
-  Rectangle {
-    id: sweep
+  // Loading bar sweeping across the top while a fetch is in flight. The
+  // track clips it so the bar never draws outside the chart's bounds.
+  Item {
+    id: sweepTrack
     visible: root.loading
     y: 0
+    width: root.width
     height: Math.max(1, Style.space(2))
-    width: parent.width * 0.25
-    radius: height / 2
-    color: root.lineColor
-    opacity: 0.8
-    NumberAnimation on x {
-      running: sweep.visible
-      loops: Animation.Infinite
-      from: -sweep.width
-      to: root.width
-      duration: 1100
-      easing.type: Easing.InOutQuad
+    clip: true
+
+    Rectangle {
+      id: sweep
+      height: parent.height
+      width: sweepTrack.width * 0.25
+      radius: height / 2
+      color: root.lineColor
+      opacity: 0.8
+      NumberAnimation on x {
+        running: sweepTrack.visible
+        loops: Animation.Infinite
+        from: -sweep.width
+        to: sweepTrack.width
+        duration: 1100
+        easing.type: Easing.InOutQuad
+      }
     }
   }
 
