@@ -11,7 +11,7 @@ A compact Bitcoin Cash price pill for the [Omarchy](https://omarchy.org) bar, wi
 - **Market stats** — 24h high/low, market cap with rank, and 24h volume.
 - **Coin search** — look up any coin CoinGecko lists. It's a temporary view: closing the panel always returns to BCH.
 - **Theme aware** — up/down colors come from your current Omarchy theme's `green` / `red`, and everything else follows the shell palette.
-- **Polite with the API** — the pill refreshes every 60s, charts are cached (1 min for 1D, 5 min for longer ranges), and on errors or rate limits it keeps showing the last data and backs off to 2 and then 4 minutes. The last price is cached on disk so the pill has a value right after login.
+- **Polite with the API** — see [API usage](#api-usage). The last price is cached on disk so the pill has a value right after login.
 
 ## Install
 
@@ -62,8 +62,22 @@ o.bind("SUPER + ALT + C", "Crypto prices", "omarchy-shell shell toggle bch-crypt
 ## Notes
 
 - Requires `curl` and a Nerd Font for the `₿` glyph (both ship with Omarchy).
-- CoinGecko's keyless tier is rate-limited per IP (roughly 5–30 calls/min). Normal use stays well under it. If you hit a limit, the panel footer turns red and the plugin retries on its own.
-- If edits to the plugin files don't show up, run `omarchy restart shell`.
+
+## API usage
+
+CoinGecko's keyless tier is rate-limited per IP (roughly 5–30 calls/min), so every request goes through a shared gate:
+
+- **One request per window, however often you open the panel.** Prices are reused for 30s after a manual refresh (opening the panel, `r`, middle-click) and refreshed in the background once they're about a minute old. Charts are reused for 1 min (1D) or 5 min (longer ranges), and 30s on a manual refresh. Search results are cached per query for 10 min.
+- **Multi-monitor safe.** The bar exists once per monitor, but all instances share one cache, one in-flight request per resource, and one backoff state, so extra monitors add no extra requests.
+- **Real backoff.** A 429, 5xx or network failure closes the gate for 60s, then 120s, then 240s, for *every* request path including manual refresh. The last data stays on screen and the footer shows the retry countdown.
+
+## Development
+
+```bash
+node --test tests/   # request gate, caches, parsing, formatting
+```
+
+After editing QML, run `omarchy restart shell` to load the changes.
 
 ## Files
 
@@ -71,7 +85,9 @@ o.bind("SUPER + ALT + C", "Crypto prices", "omarchy-shell shell toggle bch-crypt
 | ---------------- | --------------------------------------------- |
 | `manifest.json`  | Plugin metadata and entry point               |
 | `BarWidget.qml`  | Bar pill                                      |
-| `Panel.qml`      | Popup UI, fetching, caching, search           |
+| `Panel.qml`      | Popup UI and request orchestration            |
+| `Shared.js`      | Caches, in-flight dedupe and backoff shared by all instances |
+| `Request.qml`    | One curl request returning (status, body)     |
 | `PriceChart.qml` | Canvas area chart with hover crosshair        |
 | `Model.js`       | API URLs, response parsing, number formatting |
 

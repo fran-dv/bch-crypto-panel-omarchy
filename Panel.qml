@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "Shared.js" as Shared
 
 // Crypto price popup. Owns every CoinGecko fetch: the pinned coin that feeds
 // the bar pill, a temporarily searched coin, its chart, and coin search.
@@ -26,27 +27,33 @@ Panel {
   ]
 
   // ---- State -------------------------------------------------------------
+  //
+  // Quotes, charts, search results and the backoff gate live in Shared.js,
+  // which every instance of this panel (one per monitor) shares. `revision`
+  // is bumped whenever Shared changes so the bindings below re-evaluate.
 
-  property var pinnedData: null        // default coin, feeds the pill
-  property var searchedData: null      // coin picked from search, panel only
+  property int revision: 0
+  property var _sharedListener: null
+
   property string activeId: defaultId
   readonly property bool viewingDefault: activeId === defaultId
-  readonly property var activeData: viewingDefault ? pinnedData : (searchedData && searchedData.id === activeId ? searchedData : null)
-
   property string range: "1"
-  property var chartPoints: []
-  property var chartCache: ({})        // "id:days" -> { at, points }
-  property bool chartLoading: false
 
-  property double lastUpdated: 0
-  property int failures: 0
-  property bool rateLimited: false
+  readonly property var pinnedData: { root.revision; return Shared.quote(root.defaultId) }
+  readonly property var activeData: { root.revision; return Shared.quote(root.activeId) }
+  readonly property double activeUpdatedAt: { root.revision; return Shared.quoteAt(root.activeId) }
+  readonly property var chartPoints: { root.revision; return Shared.chart(root.activeId, root.range) || [] }
+  readonly property bool chartLoading: {
+    root.revision
+    return chartReq.running
+      || Shared.isInFlight("chart:" + Shared.chartKey(root.activeId, root.range), Date.now())
+  }
+  readonly property var gate: { root.revision; return Shared.gate }
+
   property double nowMs: Date.now()
 
   property var searchResults: []
   property int suggestionIndex: 0
-  property string searchPendingQuery: ""
-  property string searchActiveQuery: ""
 
   // Theme market colors (colors.toml green/red), falling back to palette roles.
   property var themeColors: ({ green: "", red: "" })
@@ -65,6 +72,19 @@ Panel {
     : ""
 
   // ---- Lifecycle ---------------------------------------------------------
+
+  Component.onCompleted: {
+    root._sharedListener = function() { root.revision++ }
+    Shared.subscribe(root._sharedListener)
+    root.loadPinnedCache()
+    // Deferred so every monitor's instance has subscribed before the first
+    // check; the first one to run claims the request, the rest reuse it.
+    Qt.callLater(root.backgroundCheck)
+  }
+
+  Component.onDestruction: {
+    if (root._sharedListener) Shared.unsubscribe(root._sharedListener)
+  }
 
   function open() {
     themeFile.reload()
@@ -97,26 +117,33 @@ Panel {
     keyCatcher.forceActiveFocus()
   }
 
+  // User-initiated refresh (open, `r`, middle-click, IPC). Throttled: data
+  // younger than the manual age is reused, and nothing goes out while the
+  // backoff gate is closed, however often this is called.
   function refresh() {
-    fetchPinned()
-    if (!viewingDefault) fetchActive()
-    requestChart(true)
+    ensureQuote(defaultId, Shared.QUOTE_MANUAL_AGE_MS)
+    if (!viewingDefault) ensureQuote(activeId, Shared.QUOTE_MANUAL_AGE_MS)
+    ensureChart(true)
+  }
+
+  function backgroundCheck() {
+    ensureQuote(defaultId, Shared.QUOTE_POLL_AGE_MS)
+    if (!opened) return
+    if (!viewingDefault) ensureQuote(activeId, Shared.QUOTE_POLL_AGE_MS)
+    ensureChart(false)
   }
 
   function selectCoin(id) {
     if (!id) return
     activeId = id
-    if (!viewingDefault) {
-      if (!searchedData || searchedData.id !== id) searchedData = null
-      fetchActive()
-    }
-    requestChart(false)
+    ensureQuote(id, Shared.QUOTE_MANUAL_AGE_MS)
+    ensureChart(false)
   }
 
   function selectRange(value) {
     if (range === value) return
     range = value
-    requestChart(false)
+    ensureChart(false)
   }
 
   function stepRange(delta) {
@@ -126,157 +153,131 @@ Panel {
     selectRange(ranges[idx].value)
   }
 
-  // ---- Fetching ----------------------------------------------------------
+  // ---- Quotes ------------------------------------------------------------
 
-  function curl(url) {
-    return ["curl", "-sS", "--max-time", "8", "-w", "\n%{http_code}", url]
+  // Fetch a quote only if it is older than `maxAge`, the gate is open and no
+  // instance already has it in flight. The pinned coin and the searched coin
+  // use separate requests so a slow search never delays the pill.
+  function ensureQuote(id, maxAge) {
+    var now = Date.now()
+    if (!Shared.needsQuote(id, maxAge, now)) return
+    var req = id === defaultId ? pinnedReq : activeReq
+    if (req.running) return  // completion re-checks the current coin
+    if (!Shared.tryBegin(Shared.quoteKey(id), now)) return
+    req.fetch(Model.marketsUrl(id), id)
+    Shared.notify()
   }
 
-  function noteResult(status) {
-    if (status === 200) {
-      failures = 0
-      rateLimited = false
-      lastUpdated = Date.now()
-      return true
+  function onQuoteCompleted(status, body, id) {
+    var now = Date.now()
+    Shared.end(Shared.quoteKey(id))
+    if (Shared.recordResult(status, now)) {
+      var parsed = Model.parseMarkets(body)
+      if (parsed && Shared.storeQuote(id, parsed, now) && id === defaultId) persistPinned(parsed, now)
     }
-    failures = Math.min(failures + 1, 3)
-    rateLimited = status === 429
-    return false
+    Shared.notify()
+    // The user may have picked another coin while this was in flight.
+    if (id !== defaultId && id !== activeId && !viewingDefault)
+      ensureQuote(activeId, Shared.QUOTE_MANUAL_AGE_MS)
   }
 
-  function fetchPinned() {
-    if (pinnedProc.running) return
-    pinnedProc.command = curl(Model.marketsUrl(defaultId))
-    pinnedProc.running = true
+  Request {
+    id: pinnedReq
+    onCompleted: function(status, body, tag) { root.onQuoteCompleted(status, body, tag) }
   }
 
-  Process {
-    id: pinnedProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = Model.splitResponse(text)
-        if (!root.noteResult(res.status)) return
-        var parsed = Model.parseMarkets(res.body)
-        if (!parsed) return
-        root.pinnedData = parsed
-        pinnedCache.setText(JSON.stringify(parsed))
-      }
-    }
+  Request {
+    id: activeReq
+    onCompleted: function(status, body, tag) { root.onQuoteCompleted(status, body, tag) }
   }
 
-  // Last good pinned quote, so a restart during a rate-limit window still
-  // shows a (stale) price instead of an empty pill.
+  // Last good pinned quote on disk, so the pill has a value right after
+  // login or a shell restart, and a fresh one skips the startup request.
   FileView {
     id: pinnedCache
     path: Quickshell.env("HOME") + "/.cache/bch-crypto-panel.json"
+    blockLoading: true
     printErrors: false
-    onLoaded: {
-      if (root.pinnedData) return
-      try {
-        var cached = JSON.parse(text())
-        if (cached && isFinite(Number(cached.price))) root.pinnedData = cached
-      } catch (e) {}
-    }
   }
 
-  property string activeFetchId: ""
-
-  function fetchActive() {
-    if (viewingDefault) return
-    if (activeProc.running) return
-    activeFetchId = activeId
-    activeProc.command = curl(Model.marketsUrl(activeId))
-    activeProc.running = true
+  function loadPinnedCache() {
+    var cached = Model.parsePinnedCache(pinnedCache.text())
+    if (cached && Shared.storeQuote(defaultId, cached.data, cached.at)) Shared.notify()
   }
 
-  Process {
-    id: activeProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = Model.splitResponse(text)
-        var fetched = root.activeFetchId
-        if (root.noteResult(res.status)) {
-          var parsed = Model.parseMarkets(res.body)
-          if (parsed && fetched === root.activeId) root.searchedData = parsed
-        }
-        // The user may have picked another coin mid-flight.
-        if (fetched !== root.activeId && !root.viewingDefault) Qt.callLater(root.fetchActive)
+  function persistPinned(data, at) {
+    pinnedCache.setText(JSON.stringify({ at: at, data: data }))
+  }
+
+  // ---- Charts ------------------------------------------------------------
+
+  // `force` (user refresh) lowers the reuse window to CHART_MANUAL_AGE_MS;
+  // otherwise the per-range TTL applies. One chart request per instance at a
+  // time; completion re-checks whatever coin/range is current by then.
+  function ensureChart(force) {
+    var now = Date.now()
+    var id = activeId
+    var days = range
+    if (!Shared.needsChart(id, days, force, now)) return
+    if (chartReq.running) return
+    var key = "chart:" + Shared.chartKey(id, days)
+    if (!Shared.tryBegin(key, now)) return
+    chartReq.fetch(Model.chartUrl(id, days), { id: id, days: days, key: key })
+    Shared.notify()
+  }
+
+  Request {
+    id: chartReq
+    onCompleted: function(status, body, tag) {
+      var now = Date.now()
+      Shared.end(tag.key)
+      if (Shared.recordResult(status, now)) {
+        var points = Model.parseChart(body, 300)
+        if (points.length > 1) Shared.storeChart(tag.id, tag.days, points, now)
       }
-    }
-  }
-
-  property string chartFetchKey: ""
-  readonly property string chartKey: activeId + ":" + range
-
-  function chartTtl(days) {
-    return days === "1" ? 60 * 1000 : 5 * 60 * 1000
-  }
-
-  // Serve the cached series if fresh; otherwise fetch. Only one chart
-  // request runs at a time; a stale finish re-requests the current key.
-  function requestChart(force) {
-    var key = chartKey
-    var cached = chartCache[key]
-    if (cached) chartPoints = cached.points
-    else chartPoints = []
-    var fresh = cached && Date.now() - cached.at < chartTtl(range)
-    if (fresh && !force) { chartLoading = false; return }
-    if (fresh && force && Date.now() - cached.at < 30 * 1000) { chartLoading = false; return }
-    chartLoading = true
-    if (chartProc.running) return
-    chartFetchKey = key
-    chartProc.command = curl(Model.chartUrl(activeId, range))
-    chartProc.running = true
-  }
-
-  Process {
-    id: chartProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = Model.splitResponse(text)
-        var key = root.chartFetchKey
-        if (root.noteResult(res.status)) {
-          var pts = Model.parseChart(res.body, 300)
-          if (pts.length > 1) {
-            var next = ({})
-            for (var k in root.chartCache) next[k] = root.chartCache[k]
-            next[key] = { at: Date.now(), points: pts }
-            root.chartCache = next
-            if (key === root.chartKey) root.chartPoints = pts
-          }
-        }
-        if (key !== root.chartKey) Qt.callLater(function() { root.requestChart(false) })
-        else root.chartLoading = false
-      }
+      Shared.notify()
+      if (tag.id !== root.activeId || tag.days !== root.range) root.ensureChart(false)
     }
   }
 
   // ---- Search ------------------------------------------------------------
 
+  // Debounced; one request at a time. Results are cached per query, so
+  // retyping or backspacing to an earlier query costs nothing.
+  property string searchPendingQuery: ""
+
   function clearSearch() {
     searchField.text = ""
     searchResults = []
     suggestionIndex = 0
+    searchPendingQuery = ""
     searchDebounce.stop()
   }
 
   function requestSearch() {
     var query = searchField.text.trim()
+    searchPendingQuery = ""
     if (query.length < 2) {
       searchResults = []
       return
     }
-    searchPendingQuery = query
-    if (!searchProc.running) startSearch()
+    var now = Date.now()
+    var cached = Shared.cachedSearch(query, now)
+    if (cached) {
+      showSearchResults(cached)
+      return
+    }
+    if (searchReq.running) {
+      searchPendingQuery = query  // picked up when the current one finishes
+      return
+    }
+    if (!Shared.canRequest(now)) return  // footer shows the retry countdown
+    searchReq.fetch(Model.searchUrl(query), query)
   }
 
-  function startSearch() {
-    searchActiveQuery = searchPendingQuery
-    searchProc.command = curl(Model.searchUrl(searchActiveQuery))
-    searchProc.running = true
+  function showSearchResults(results) {
+    searchResults = results
+    suggestionIndex = 0
   }
 
   function pickResult(result) {
@@ -286,18 +287,15 @@ Panel {
     selectCoin(result.id)
   }
 
-  Process {
-    id: searchProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = Model.splitResponse(text)
-        if (res.status === 429) root.rateLimited = true
-        root.searchResults = res.status === 200 && searchField.text.trim().length >= 2
-          ? Model.parseSearch(res.body, 6) : []
-        root.suggestionIndex = 0
-        if (root.searchPendingQuery !== root.searchActiveQuery) Qt.callLater(root.startSearch)
-      }
+  Request {
+    id: searchReq
+    onCompleted: function(status, body, query) {
+      var now = Date.now()
+      if (Shared.recordResult(status, now)) Shared.storeSearch(query, Model.parseSearch(body, 6), now)
+      Shared.notify()
+      if (Shared.searchKey(query) === Shared.searchKey(searchField.text))
+        root.showSearchResults(Shared.cachedSearch(query, now) || [])
+      if (root.searchPendingQuery !== "") root.requestSearch()
     }
   }
 
@@ -309,29 +307,20 @@ Panel {
 
   // ---- Timers ------------------------------------------------------------
 
-  // Pill poll. Backs off 60s -> 120s -> 240s while requests fail.
+  // Staleness check, not a fetch: a request only goes out when data is older
+  // than QUOTE_POLL_AGE_MS and the gate is open, so across all instances the
+  // pill costs about one request a minute, and a closed gate is retried
+  // within one tick of reopening.
   Timer {
-    interval: 60 * 1000 * Math.pow(2, Math.min(root.failures, 2))
+    interval: 15 * 1000
     running: true
     repeat: true
-    triggeredOnStart: true
-    onTriggered: root.fetchPinned()
+    onTriggered: root.backgroundCheck()
   }
 
-  // While open, keep the searched coin and chart fresh too.
+  // Drives the "updated …" / "retrying in …" footer.
   Timer {
-    interval: 60 * 1000 * Math.pow(2, Math.min(root.failures, 2))
-    running: root.opened
-    repeat: true
-    onTriggered: {
-      root.fetchActive()
-      root.requestChart(false)
-    }
-  }
-
-  // Drives the "updated Xs ago" footer.
-  Timer {
-    interval: 5000
+    interval: 1000
     running: root.opened
     repeat: true
     triggeredOnStart: true
@@ -360,11 +349,15 @@ Panel {
 
   // ---- UI ----------------------------------------------------------------
 
-  function updatedText() {
-    if (rateLimited) return "Rate limited · retrying soon"
-    if (failures > 0) return "Offline · showing last data"
-    if (!lastUpdated) return "CoinGecko"
-    var s = Math.max(0, Math.round((nowMs - lastUpdated) / 1000))
+  readonly property bool gateClosed: gate.blockedUntil > nowMs
+
+  function statusText() {
+    if (gateClosed) {
+      var wait = Math.ceil((gate.blockedUntil - nowMs) / 1000)
+      return (gate.rateLimited ? "Rate limited" : "Offline") + " · retrying in " + wait + "s"
+    }
+    if (!activeUpdatedAt) return "CoinGecko"
+    var s = Math.max(0, Math.round((nowMs - activeUpdatedAt) / 1000))
     var ago = s < 10 ? "just now" : (s < 60 ? s + "s ago" : Math.round(s / 60) + "m ago")
     return "CoinGecko · updated " + ago
   }
@@ -672,8 +665,8 @@ Panel {
 
           Text {
             id: footer
-            text: root.updatedText()
-            color: root.rateLimited || root.failures > 0 ? root.downColor : root.muted
+            text: root.statusText()
+            color: root.gateClosed ? root.downColor : root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }

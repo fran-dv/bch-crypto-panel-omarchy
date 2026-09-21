@@ -51,6 +51,22 @@ function parseMarkets(body) {
   }
 }
 
+// Disk cache of the pinned quote: `{ at, data }`. 1.0.0 wrote the bare quote
+// object; that is still accepted with `at: 0` so it shows immediately but is
+// refreshed on the first check.
+function parsePinnedCache(text) {
+  try {
+    var parsed = JSON.parse(String(text || ""))
+    if (!parsed || typeof parsed !== "object") return null
+    if (parsed.data && isFinite(num(parsed.data.price)))
+      return { at: isFinite(num(parsed.at)) ? num(parsed.at) : 0, data: parsed.data }
+    if (isFinite(num(parsed.price))) return { at: 0, data: parsed }
+    return null
+  } catch (e) {
+    return null
+  }
+}
+
 // Returns [{ t, p }] ordered by time, downsampled to at most `maxPoints`.
 function parseChart(body, maxPoints) {
   try {
