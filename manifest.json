@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "bch-crypto-panel",
+  "name": "BCH Crypto Panel",
+  "version": "1.0.0",
+  "author": "fran-dv",
+  "description": "Bitcoin Cash price pill with a live chart, market stats and coin search (CoinGecko)",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "BCH Crypto Panel",
+    "description": "Bitcoin Cash price pill with a live chart, market stats and coin search (CoinGecko)",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}
