@@ -142,11 +142,10 @@ function formatPrice(v) {
   return "$" + withCommas(s)
 }
 
-// Bar pill: no currency sign, whole units once cents stop mattering.
+// Bar pill: same precision as the panel, minus the currency sign.
 function formatPillPrice(v) {
   var n = num(v)
   if (!isFinite(n)) return "—"
-  if (Math.abs(n) >= 100) return withCommas(Math.round(n).toString())
   return formatPrice(n).slice(1)
 }
 
